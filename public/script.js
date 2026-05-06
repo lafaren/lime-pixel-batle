@@ -1,15 +1,81 @@
 const socket = io();
 const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
+const ctx = canvas.getContext('2d', { alpha: false }); // Отключаем прозрачность для скорости
 const colorPicker = document.getElementById('colorPicker');
 
 const SIZE = 1000;
-let pixels = null;
+let pixels = new Uint8Array(SIZE * SIZE * 3);
 
 // Настройки камеры
 let scale = 1;
 let offsetX = 0;
 let offsetY = 0;
+
+// Создаем "оффскрин" холст ОДИН раз, чтобы не нагружать память
+const offscreenCanvas = document.createElement('canvas');
+offscreenCanvas.width = SIZE;
+offscreenCanvas.height = SIZE;
+const offCtx = offscreenCanvas.getContext('2d', { alpha: false });
+
+function updateOffscreen() {
+    const imgData = offCtx.createImageData(SIZE, SIZE);
+    for (let i = 0; i < SIZE * SIZE; i++) {
+        const i3 = i * 3;
+        const i4 = i * 4;
+        imgData.data[i4] = pixels[i3];
+        imgData.data[i4 + 1] = pixels[i3 + 1];
+        imgData.data[i4 + 2] = pixels[i3 + 2];
+        imgData.data[i4 + 3] = 255;
+    }
+    offCtx.putImageData(imgData, 0, 0);
+}
+
+function draw() {
+    // Чистим основной холст
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.save();
+    ctx.translate(offsetX, offsetY);
+    ctx.scale(scale, scale);
+
+    // ВАЖНО: Отключаем сглаживание ПЕРЕД отрисовкой
+    ctx.imageSmoothingEnabled = false;
+    ctx.mozImageSmoothingEnabled = false;
+    ctx.webkitImageSmoothingEnabled = false;
+    ctx.msImageSmoothingEnabled = false;
+
+    // Рисуем заранее подготовленный холст
+    ctx.drawImage(offscreenCanvas, 0, 0);
+    
+    ctx.restore();
+}
+
+socket.on('init', (data) => {
+    pixels = new Uint8Array(data);
+    updateOffscreen(); // Генерируем картинку
+    
+    // Авто-центрирование
+    scale = Math.min(window.innerWidth, window.innerHeight) / SIZE * 0.8;
+    offsetX = (window.innerWidth - SIZE * scale) / 2;
+    offsetY = (window.innerHeight - SIZE * scale) / 2;
+    draw();
+});
+
+socket.on('update', ({ index, r, g, b }) => {
+    const i3 = index * 3;
+    pixels[i3] = r;
+    pixels[i3 + 1] = g;
+    pixels[i3 + 2] = b;
+    
+    // Обновляем только один пиксель на оффскрин холсте (супер-быстро)
+    offCtx.fillStyle = `rgb(${r},${g},${b})`;
+    offCtx.fillRect(index % SIZE, Math.floor(index / SIZE), 1, 1);
+    
+    draw();
+});
+
+// --- УПРАВЛЕНИЕ (без изменений, но с фиксом зума) ---
 
 function resize() {
     canvas.width = window.innerWidth;
@@ -17,63 +83,14 @@ function resize() {
     draw();
 }
 
-function draw() {
-    if (!pixels) return;
+window.addEventListener('resize', resize);
+resize();
 
-    // Очистка фона
-    ctx.fillStyle = "#1a1a1a";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    ctx.save();
-    ctx.translate(offsetX, offsetY);
-    ctx.scale(scale, scale);
-
-    // Чтобы пиксели были супер-четкими
-    ctx.imageSmoothingEnabled = false;
-
-    // Рисуем всё поле сразу как картинку (это максимально быстро)
-    const imgData = ctx.createImageData(SIZE, SIZE);
-    for (let i = 0; i < SIZE * SIZE; i++) {
-        imgData.data[i * 4] = pixels[i * 3];
-        imgData.data[i * 4 + 1] = pixels[i * 3 + 1];
-        imgData.data[i * 4 + 2] = pixels[i * 3 + 2];
-        imgData.data[i * 4 + 3] = 255;
-    }
-    
-    // Используем временный canvas для мгновенного вывода
-    const tempCanvas = document.createElement('canvas');
-    tempCanvas.width = SIZE;
-    tempCanvas.height = SIZE;
-    tempCanvas.getContext('2d').putImageData(imgData, 0, 0);
-    
-    ctx.drawImage(tempCanvas, 0, 0);
-    ctx.restore();
-}
-
-socket.on('init', (data) => {
-    pixels = new Uint8Array(data);
-    // Центрируем поле при первом входе
-    scale = Math.min(canvas.width, canvas.height) / SIZE * 0.8;
-    offsetX = (canvas.width - SIZE * scale) / 2;
-    offsetY = (canvas.height - SIZE * scale) / 2;
-    draw();
-});
-
-socket.on('update', ({ index, r, g, b }) => {
-    if (pixels) {
-        pixels[index * 3] = r;
-        pixels[index * 3 + 1] = g;
-        pixels[index * 3 + 2] = b;
-        draw();
-    }
-});
-
-// Управление
 let isDragging = false;
 let startX, startY;
 
 canvas.addEventListener('mousedown', (e) => {
-    if (e.button === 0) { // ЛКМ - Рисуем
+    if (e.button === 0) {
         const x = Math.floor((e.clientX - offsetX) / scale);
         const y = Math.floor((e.clientY - offsetY) / scale);
         if (x >= 0 && x < SIZE && y >= 0 && y < SIZE) {
@@ -83,7 +100,7 @@ canvas.addEventListener('mousedown', (e) => {
             const b = parseInt(hex.slice(5, 7), 16);
             socket.emit('pixel', { index: y * SIZE + x, r, g, b });
         }
-    } else { // ПКМ - Двигаем
+    } else {
         isDragging = true;
         startX = e.clientX - offsetX;
         startY = e.clientY - offsetY;
@@ -102,19 +119,20 @@ window.addEventListener('mouseup', () => isDragging = false);
 
 canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
-    const zoomSpeed = 1.2;
-    const factor = e.deltaY > 0 ? 1 / zoomSpeed : zoomSpeed;
-    
-    // Зум в точку курсора
+    const factor = e.deltaY > 0 ? 0.8 : 1.2;
     const mouseX = e.clientX;
     const mouseY = e.clientY;
+    
+    // Зум к курсору
     offsetX = mouseX - (mouseX - offsetX) * factor;
     offsetY = mouseY - (mouseY - offsetY) * factor;
     scale *= factor;
     
+    // Ограничения
+    if (scale < 0.1) scale = 0.1;
+    if (scale > 100) scale = 100;
+
     draw();
 }, { passive: false });
 
-window.addEventListener('resize', resize);
 canvas.oncontextmenu = (e) => e.preventDefault();
-resize();
