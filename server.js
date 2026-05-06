@@ -5,42 +5,39 @@ const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, {
+    maxHttpBufferSize: 1e8 // Увеличиваем лимит данных для передачи большого холста
+});
 
-// Настройки поля
-const WIDTH = 100; 
-const HEIGHT = 100;
-// (белый цвет)
-let canvasData = Array(WIDTH * HEIGHT).fill('#FFFFFF');
+const WIDTH = 1000;
+const HEIGHT = 1000;
+// Создаем массив на 1 миллион пикселей. Изначально все белые.
+let canvasData = Buffer.alloc(WIDTH * HEIGHT * 3, 255); // Используем Buffer для экономии памяти (RGB)
 
-//  файлы из папки public
 app.use(express.static(path.join(__dirname, 'public')));
 
 io.on('connection', (socket) => {
-    console.log('Новый игрок подключился:', socket.id);
+    console.log('Игрок вошел');
 
-  
+    // Отправляем текущее состояние холста
     socket.emit('init', canvasData);
 
-    //пиксель
     socket.on('pixel', (data) => {
-        const { index, color } = data;
+        const { index, r, g, b } = data;
 
-        // Проверка
-        if (index >= 0 && index < canvasData.length && /^#[0-9A-F]{6}$/i.test(color)) {
-            canvasData[index] = color;
-            // Рассылаем это изменение всем остальным
-            io.emit('update', { index, color });
+        if (index >= 0 && index < WIDTH * HEIGHT) {
+            const offset = index * 3;
+            canvasData[offset] = r;
+            canvasData[offset + 1] = g;
+            canvasData[offset + 2] = b;
+
+            // Рассылаем всем только изменения
+            io.emit('update', { index, r, g, b });
         }
-    });
-
-    socket.on('disconnect', () => {
-        console.log('Игрок отключился');
     });
 });
 
-// Порт для хостинга
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`Сервер запущен на порту ${PORT}`);
+    console.log(`Сервер: http://localhost:${PORT}`);
 });
