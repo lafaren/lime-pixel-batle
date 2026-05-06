@@ -3,28 +3,24 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pixel Battle Live</title>
+    <title>Pixel Battle 1000x1000</title>
     <style>
-        body { background: #1a1a1a; color: white; text-align: center; font-family: sans-serif; margin: 0; padding: 20px; }
-        canvas { 
-            border: 3px solid #444; 
-            background: #fff; 
-            box-shadow: 0 0 20px rgba(0,0,0,0.5);
-            image-rendering: pixelated; /* Чтобы пиксели были четкими */
-            max-width: 90vw;
-            cursor: crosshair;
+        body { margin: 0; overflow: hidden; background: #111; font-family: sans-serif; }
+        canvas { display: block; image-rendering: pixelated; }
+        .ui { 
+            position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+            background: rgba(0,0,0,0.8); padding: 15px; border-radius: 50px;
+            display: flex; align-items: center; gap: 10px; border: 1px solid #444;
         }
-        .ui { margin-top: 15px; background: #333; padding: 10px; border-radius: 8px; display: inline-block; }
-        input[type="color"] { width: 50px; height: 50px; border: none; cursor: pointer; vertical-align: middle; }
+        input[type="color"] { width: 40px; height: 40px; border: none; cursor: pointer; background: none; }
+        .info { position: fixed; top: 10px; left: 10px; color: white; pointer-events: none; opacity: 0.7; }
     </style>
 </head>
 <body>
-    <h1>Пиксел Батл от ЛК</h1>
+    <div class="info">ЛКМ: Рисовать | ПКМ: Двигать | Колесо: Зум</div>
     <canvas id="canvas"></canvas>
-    <br>
     <div class="ui">
-        <span>Выбери цвет: </span>
-        <input type="color" id="colorPicker" value="#000000">
+        <input type="color" id="colorPicker" value="#ff0000">
     </div>
 
     <script src="/socket.io/socket.io.js"></script>
