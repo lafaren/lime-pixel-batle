@@ -3,107 +3,96 @@ const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d', { alpha: false });
 const colorPicker = document.getElementById('colorPicker');
 
-const SIZE = 800; // Размер поля в пикселях
-let pixels = Array(SIZE * SIZE).fill('#FFFFFF');
+const SIZE = 1000;
+let pixels = new Uint8Array(SIZE * SIZE * 3);
 
-// Настройки камеры
-let scale = 10;   // Текущий зум
-let offsetX = 0;  // Смещение по X
-let offsetY = 0;  // Смещение по Y
+let scale = 0.5;
+let offsetX = window.innerWidth / 2 - (SIZE * scale) / 2;
+let offsetY = window.innerHeight / 2 - (SIZE * scale) / 2;
 
-// Инициализация холста
-canvas.width = window.innerWidth * 0.8;
-canvas.height = window.innerHeight * 0.7;
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
 
 function draw() {
-    ctx.fillStyle = '#1a1a1a'; // Фон за пределами холста
+    ctx.fillStyle = '#1a1a1a';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     ctx.save();
     ctx.translate(offsetX, offsetY);
     ctx.scale(scale, scale);
 
-    // Рисуем все пиксели
-    for (let i = 0; i < pixels.length; i++) {
-        const x = i % SIZE;
-        const y = Math.floor(i / SIZE);
-        ctx.fillStyle = pixels[i];
-        ctx.fillRect(x, y, 1, 1);
+    // Создаем ImageData для быстрой отрисовки миллиона пикселей
+    const imgData = ctx.createImageData(SIZE, SIZE);
+    for (let i = 0; i < SIZE * SIZE; i++) {
+        imgData.data[i * 4] = pixels[i * 3];     // R
+        imgData.data[i * 4 + 1] = pixels[i * 3 + 1]; // G
+        imgData.data[i * 4 + 2] = pixels[i * 3 + 2]; // B
+        imgData.data[i * 4 + 3] = 255;               // A
     }
+    
+    // Отрисовка на временный холст для масштабирования
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = SIZE;
+    tempCanvas.height = SIZE;
+    tempCanvas.getContext('2d').putImageData(imgData, 0, 0);
+    
+    ctx.drawImage(tempCanvas, 0, 0);
     ctx.restore();
 }
 
-// Получение данных от сервера
 socket.on('init', (data) => {
-    pixels = data;
+    pixels = new Uint8Array(data);
     draw();
 });
 
-socket.on('update', ({ index, color }) => {
-    pixels[index] = color;
+socket.on('update', ({ index, r, g, b }) => {
+    pixels[index * 3] = r;
+    pixels[index * 3 + 1] = g;
+    pixels[index * 3 + 2] = b;
     draw();
 });
 
-// ПРИБЛИЖЕНИЕ (Zoom)
-canvas.addEventListener('wheel', (e) => {
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? 0.9 : 1.1;
-    scale *= delta;
-    
-    // Ограничение зума
-    if (scale < 1) scale = 1;
-    if (scale > 50) scale = 50;
-    
-    draw();
-}, { passive: false });
+function hexToRgb(hex) {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return { r, g, b };
+}
 
-// ПЕРЕМЕЩЕНИЕ И РИСОВАНИЕ
+// Управление
 let isDragging = false;
-let lastMouseX, lastMouseY;
+let lastX, lastY;
 
 canvas.addEventListener('mousedown', (e) => {
-    if (e.button === 0) { // Левая кнопка - рисуем
-        const rect = canvas.getBoundingClientRect();
-        const mouseX = e.clientX - rect.left;
-        const mouseY = e.clientY - rect.top;
-
-        // Вычисляем координаты пикселя с учетом зума и смещения
-        const x = Math.floor((mouseX - offsetX) / scale);
-        const y = Math.floor((mouseY - offsetY) / scale);
-
+    if (e.button === 0) {
+        const x = Math.floor((e.clientX - offsetX) / scale);
+        const y = Math.floor((e.clientY - offsetY) / scale);
         if (x >= 0 && x < SIZE && y >= 0 && y < SIZE) {
-            const index = y * SIZE + x;
-            const color = colorPicker.value;
-            socket.emit('pixel', { index, color });
+            const { r, g, b } = hexToRgb(colorPicker.value);
+            socket.emit('pixel', { index: y * SIZE + x, r, g, b });
         }
-    } else if (e.button === 2 || e.button === 1) { // Правая или средняя - двигаем
+    } else {
         isDragging = true;
-        lastMouseX = e.clientX;
-        lastMouseY = e.clientY;
+        lastX = e.clientX;
+        lastY = e.clientY;
     }
 });
 
 window.addEventListener('mousemove', (e) => {
     if (isDragging) {
-        offsetX += e.clientX - lastMouseX;
-        offsetY += e.clientY - lastMouseY;
-        lastMouseX = e.clientX;
-        lastMouseY = e.clientY;
+        offsetX += e.clientX - lastX;
+        offsetY += e.clientY - lastY;
+        lastX = e.clientX;
+        lastY = e.clientY;
         draw();
     }
 });
 
-window.addEventListener('mouseup', () => {
-    isDragging = false;
-});
-
-// Отключаем контекстное меню при клике правой кнопкой
-canvas.oncontextmenu = (e) => e.preventDefault();
-
-// Перерисовка при изменении окна
-window.addEventListener('resize', () => {
-    canvas.width = window.innerWidth * 0.8;
-    canvas.height = window.innerHeight * 0.7;
+window.addEventListener('mouseup', () => isDragging = false);
+canvas.addEventListener('wheel', (e) => {
+    const zoomSpeed = 1.1;
+    scale = e.deltaY > 0 ? scale / zoomSpeed : scale * zoomSpeed;
+    scale = Math.max(0.1, Math.min(scale, 100));
     draw();
 });
-
+canvas.oncontextmenu = (e) => e.preventDefault();
