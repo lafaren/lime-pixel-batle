@@ -7,7 +7,6 @@ const SIZE = 1000;
 let pixels = new Uint8Array(SIZE * SIZE * 3);
 let currentTool = 'pencil';
 
-// Камера
 let scale = 1, offsetX = 0, offsetY = 0;
 const offCanvas = document.createElement('canvas');
 offCanvas.width = SIZE; offCanvas.height = SIZE;
@@ -20,7 +19,7 @@ function setTool(tool) {
 }
 
 function draw() {
-    ctx.fillStyle = '#0a0a0a';
+    ctx.fillStyle = '#111';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.save();
     ctx.translate(offsetX, offsetY);
@@ -53,49 +52,83 @@ function updatePixelInCanvas({ index, r, g, b }) {
     draw();
 }
 
-// АЛГОРИТМ РАЗЛОМА
+// УЛУЧШЕННЫЙ АЛГОРИТМ РАЗЛОМА
 function createRift(startX, startY) {
     const batch = [];
-    const branches = 8; // Количество "молний"
+    const numMainBranches = 6; // Количество основных лучей
+
+    for (let i = 0; i < numMainBranches; i++) {
+        growBranch(startX, startY, Math.random() * Math.PI * 2, 80, batch);
+    }
     
-    for (let b = 0; b < branches; b++) {
-        let curX = startX;
-        let curY = startY;
-        let length = Math.random() * 50 + 20; // Длина ветки
-        
-        for (let i = 0; i < length; i++) {
-            // Случайное смещение
-            curX += Math.floor(Math.random() * 3) - 1;
-            curY += Math.floor(Math.random() * 3) - 1;
-            
-            if (curX < 0 || curX >= SIZE || curY < 0 || curY >= SIZE) break;
-
-            // Выбор цвета в стиле Rain World
-            const rand = Math.random();
-            let color = { r: 0, g: 0, b: 0 }; // Тень
-            if (rand > 0.7) color = { r: 60, g: 0, b: 255 }; // Синий
-            if (rand > 0.9) color = { r: 200, g: 0, b: 255 }; // Фиолетовый
-
-            batch.push({ index: curY * SIZE + curX, ...color });
+    // Добавляем "ядро" в центре клика
+    for(let x = -3; x <= 3; x++) {
+        for(let y = -3; y <= 3; y++) {
+            if (Math.hypot(x, y) < 3) {
+                addPixelToBatch(startX + x, startY + y, {r:0, g:0, b:0}, batch);
+            }
         }
     }
+
     socket.emit('pixels_batch', batch);
 }
 
-canvas.addEventListener('mousedown', (e) => {
-    if (e.button === 0) {
-        const x = Math.floor((e.clientX - offsetX) / scale);
-        const y = Math.floor((e.clientY - offsetY) / scale);
-        const hex = colorPicker.value;
-        const rgb = { r: parseInt(hex.slice(1,3),16), g: parseInt(hex.slice(3,5),16), b: parseInt(hex.slice(5,7),16) };
+// Рекурсивная функция роста ветки
+function growBranch(x, y, angle, len, batch) {
+    if (len <= 0) return;
 
+    let curX = x;
+    let curY = y;
+    let currentAngle = angle;
+
+    for (let i = 0; i < len; i++) {
+        // Искривление линии
+        currentAngle += (Math.random() - 0.5) * 0.5;
+        curX += Math.cos(currentAngle);
+        curY += Math.sin(currentAngle);
+
+        const px = Math.round(curX);
+        const py = Math.round(curY);
+
+        // Цвета: чем дальше от центра, тем ярче фиолетовый
+        let color = { r: 0, g: 0, b: 0 };
+        if (Math.random() > 0.6) color = { r: 50, g: 0, b: 200 }; // Синий
+        if (Math.random() > 0.8) color = { r: 180, g: 0, b: 255 }; // Яркий фиолетовый
+
+        addPixelToBatch(px, py, color, batch);
+
+        // Шанс создать боковое ответвление
+        if (Math.random() < 0.05 && len > 10) {
+            growBranch(px, py, currentAngle + (Math.random() - 0.5) * 2, len * 0.6, batch);
+        }
+    }
+}
+
+function addPixelToBatch(x, y, color, batch) {
+    if (x >= 0 && x < SIZE && y >= 0 && y < SIZE) {
+        batch.push({ index: y * SIZE + x, ...color });
+    }
+}
+
+// УПРАВЛЕНИЕ
+let isDragging = false, lastX, lastY;
+
+canvas.addEventListener('mousedown', (e) => {
+    const x = Math.floor((e.clientX - offsetX) / scale);
+    const y = Math.floor((e.clientY - offsetY) / scale);
+
+    if (e.button === 0) {
         if (currentTool === 'pencil') {
-            socket.emit('pixel', { index: y * SIZE + x, ...rgb });
+            const hex = colorPicker.value;
+            socket.emit('pixel', { 
+                index: y * SIZE + x, 
+                r: parseInt(hex.slice(1,3),16), g: parseInt(hex.slice(3,5),16), b: parseInt(hex.slice(5,7),16) 
+            });
         } else if (currentTool === 'brush') {
             const batch = [];
             for(let i=-10; i<10; i++) for(let j=-10; j<10; j++) {
-                if (x+i>=0 && x+i<SIZE && y+j>=0 && y+j<SIZE)
-                    batch.push({ index: (y+j)*SIZE + (x+i), ...rgb });
+                const hex = colorPicker.value;
+                addPixelToBatch(x+i, y+j, {r: parseInt(hex.slice(1,3),16), g: parseInt(hex.slice(3,5),16), b: parseInt(hex.slice(5,7),16)}, batch);
             }
             socket.emit('pixels_batch', batch);
         } else if (currentTool === 'rift') {
@@ -107,8 +140,6 @@ canvas.addEventListener('mousedown', (e) => {
     }
 });
 
-// Управление зумом и движением (стандартное)
-let isDragging = false, lastX, lastY;
 window.addEventListener('mousemove', (e) => {
     if (isDragging) {
         offsetX += e.clientX - lastX; offsetY += e.clientY - lastY;
