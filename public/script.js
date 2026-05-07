@@ -6,8 +6,8 @@ const colorPicker = document.getElementById('colorPicker');
 const SIZE = 1000;
 let pixels = new Uint8Array(SIZE * SIZE * 3);
 let currentTool = 'pencil';
-
 let scale = 1, offsetX = 0, offsetY = 0;
+
 const offCanvas = document.createElement('canvas');
 offCanvas.width = SIZE; offCanvas.height = SIZE;
 const offCtx = offCanvas.getContext('2d', { alpha: false });
@@ -19,7 +19,7 @@ function setTool(tool) {
 }
 
 function draw() {
-    ctx.fillStyle = '#111';
+    ctx.fillStyle = '#050505';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.save();
     ctx.translate(offsetX, offsetY);
@@ -31,137 +31,138 @@ function draw() {
 
 socket.on('init', (data) => {
     pixels = new Uint8Array(data);
-    const imgData = offCtx.createImageData(SIZE, SIZE);
-    for (let i = 0; i < SIZE * SIZE; i++) {
-        imgData.data[i*4]=pixels[i*3]; imgData.data[i*4+1]=pixels[i*3+1]; imgData.data[i*4+2]=pixels[i*3+2]; imgData.data[i*4+3]=255;
-    }
-    offCtx.putImageData(imgData, 0, 0);
-    scale = Math.min(window.innerWidth, window.innerHeight) / SIZE * 0.7;
+    updateWholeCanvas();
+    scale = Math.min(window.innerWidth, window.innerHeight) / SIZE * 0.9;
     offsetX = (window.innerWidth - SIZE * scale) / 2;
     offsetY = (window.innerHeight - SIZE * scale) / 2;
     draw();
 });
 
-socket.on('update', (p) => updatePixelInCanvas(p));
-socket.on('update_batch', (batch) => batch.forEach(p => updatePixelInCanvas(p)));
-
-function updatePixelInCanvas({ index, r, g, b }) {
-    pixels[index * 3] = r; pixels[index * 3 + 1] = g; pixels[index * 3 + 2] = b;
-    offCtx.fillStyle = `rgb(${r},${g},${b})`;
-    offCtx.fillRect(index % SIZE, Math.floor(index / SIZE), 1, 1);
-    draw();
+function updateWholeCanvas() {
+    const imgData = offCtx.createImageData(SIZE, SIZE);
+    for (let i = 0; i < SIZE * SIZE; i++) {
+        imgData.data[i*4]=pixels[i*3]; imgData.data[i*4+1]=pixels[i*3+1]; imgData.data[i*4+2]=pixels[i*3+2]; imgData.data[i*4+3]=255;
+    }
+    offCtx.putImageData(imgData, 0, 0);
 }
 
-// ГИГАНТСКИЙ РАЗЛОМ С ГРАДИЕНТОМ
-function createRift(startX, startY) {
-    const batch = [];
-    const mainBranches = 12; // Больше лучей
-    const coreRadius = 8;    // Радиус черного ядра
+socket.on('update_batch', (batch) => {
+    batch.forEach(({ index, r, g, b }) => {
+        pixels[index * 3] = r; pixels[index * 3 + 1] = g; pixels[index * 3 + 2] = b;
+        offCtx.fillStyle = `rgb(${r},${g},${b})`;
+        offCtx.fillRect(index % SIZE, Math.floor(index / SIZE), 1, 1);
+    });
+    draw();
+});
 
-    // 1. Создаем центральное черное ядро
-    for(let x = -coreRadius; x <= coreRadius; x++) {
-        for(let y = -coreRadius; y <= coreRadius; y++) {
-            if (Math.hypot(x, y) < coreRadius) {
-                addPixel(startX + x, startY + y, {r:0, g:0, b:0}, batch);
-            }
+// ФУНКЦИЯ ПЛАВНОГО СМЕШИВАНИЯ ЦВЕТОВ (LERP)
+function lerpColor(c1, c2, t) {
+    return {
+        r: Math.round(c1.r + (c2.r - c1.r) * t),
+        g: Math.round(c1.g + (c2.g - c1.g) * t),
+        b: Math.round(c1.b + (c2.b - c1.b) * t)
+    };
+}
+
+function getSmoothColor(p) {
+    const colors = [
+        { t: 0.0, c: { r: 0, g: 100, b: 255 } },   // Ярко-синий (у ядра)
+        { t: 0.4, c: { r: 100, g: 0, b: 255 } },  // Фиолетовый
+        { t: 0.7, c: { r: 255, g: 0, b: 150 } },  // Розовый
+        { t: 1.0, c: { r: 0, g: 255, b: 200 } }   // Бирюзовый (на концах)
+    ];
+    for (let i = 0; i < colors.length - 1; i++) {
+        if (p >= colors[i].t && p <= colors[i + 1].t) {
+            const localT = (p - colors[i].t) / (colors[i + 1].t - colors[i].t);
+            return lerpColor(colors[i].c, colors[i + 1].c, localT);
         }
     }
+    return colors[colors.length - 1].c;
+}
 
-    // 2. Запускаем длинные молнии
-    for (let i = 0; i < mainBranches; i++) {
-        const angle = (i / mainBranches) * Math.PI * 2 + Math.random();
-        growLightning(startX, startY, angle, 250, 0, batch); // Длина 250 пикселей!
+// ГИГАНТСКИЙ РАЗЛОМ
+function createRift(startX, startY) {
+    const batch = [];
+    const mainBranches = 15;
+    const coreRadius = 15;
+
+    // 1. Черное ядро
+    for(let x = -coreRadius; x <= coreRadius; x++) {
+        for(let y = -coreRadius; y <= coreRadius; y++) {
+            if (Math.hypot(x, y) < coreRadius) addPixel(startX + x, startY + y, {r:0, g:0, b:0}, batch);
+        }
+    }
+    // 2. Синяя обводка ядра
+    for(let a = 0; a < Math.PI * 2; a += 0.1) {
+        const rx = startX + Math.cos(a) * (coreRadius + 1);
+        const ry = startY + Math.sin(a) * (coreRadius + 1);
+        addPixel(Math.round(rx), Math.round(ry), {r: 0, g: 150, b: 255}, batch);
     }
 
+    // 3. Молнии (увеличили длину до 600+)
+    for (let i = 0; i < mainBranches; i++) {
+        const angle = (i / mainBranches) * Math.PI * 2 + Math.random();
+        growLightning(startX, startY, angle, 600, 0, 5, batch); // Толщина 5 в начале
+    }
     socket.emit('pixels_batch', batch);
 }
 
-// Рекурсивные молнии с плавным цветом
-function growLightning(x, y, angle, fullLen, currentStep, batch) {
-    if (currentStep >= fullLen) return;
+function growLightning(x, y, angle, fullLen, currentStep, thickness, batch) {
+    if (currentStep >= fullLen || thickness < 0.5) return;
 
-    let curX = x;
-    let curY = y;
-    let curAngle = angle;
-    
-    // Чем дальше от центра, тем меньше ветвится
-    const stepCount = Math.random() * 20 + 10; 
+    let curX = x, curY = y, curAngle = angle;
+    const steps = Math.random() * 30 + 20;
 
-    for (let i = 0; i < stepCount; i++) {
+    for (let i = 0; i < steps; i++) {
         currentStep++;
-        curAngle += (Math.random() - 0.5) * 0.8; // Излом молнии
+        curAngle += (Math.random() - 0.5) * 0.7;
         curX += Math.cos(curAngle);
         curY += Math.sin(curAngle);
 
-        // Плавный переход цвета в зависимости от пройденного пути (currentStep / fullLen)
         const progress = currentStep / fullLen;
-        const color = getRiftColor(progress);
+        const color = getSmoothColor(progress);
+        
+        // Уменьшаем толщину по мере удаления
+        const curThickness = Math.max(1, thickness * (1 - progress));
 
-        addPixel(Math.round(curX), Math.round(curY), color, batch);
+        for (let tx = -Math.floor(curThickness/2); tx <= Math.ceil(curThickness/2); tx++) {
+            for (let ty = -Math.floor(curThickness/2); ty <= Math.ceil(curThickness/2); ty++) {
+                addPixel(Math.round(curX + tx), Math.round(curY + ty), color, batch);
+            }
+        }
 
-        // Шанс ветвления
-        if (Math.random() < 0.04 && currentStep < fullLen * 0.8) {
-            const sideAngle = curAngle + (Math.random() - 0.5) * 1.5;
-            growLightning(curX, curY, sideAngle, fullLen, currentStep + 10, batch);
+        if (Math.random() < 0.03 && currentStep < fullLen * 0.7) {
+            growLightning(curX, curY, curAngle + (Math.random()-0.5)*2, fullLen, currentStep, thickness * 0.6, batch);
         }
     }
-}
-
-// Функция плавного градиента
-function getRiftColor(p) {
-    if (p < 0.2) return { r: 0, g: 0, b: 0 };           // В начале черное
-    if (p < 0.5) return { r: 0, g: 50, b: 255 };        // Потом глубокий синий
-    if (p < 0.8) return { r: 150, g: 0, b: 255 };      // Затем фиолетовый
-    return { r: 255, g: 200, b: 0 };                   // На концах искры (золотистый/любой)
 }
 
 function addPixel(x, y, color, batch) {
-    if (x >= 0 && x < SIZE && y >= 0 && y < SIZE) {
-        batch.push({ index: y * SIZE + x, ...color });
-    }
+    if (x >= 0 && x < SIZE && y >= 0 && y < SIZE) batch.push({ index: y * SIZE + x, ...color });
 }
 
-// УПРАВЛЕНИЕ
+// УПРАВЛЕНИЕ (без изменений)
 let isDragging = false, lastX, lastY;
 canvas.addEventListener('mousedown', (e) => {
-    const x = Math.floor((e.clientX - offsetX) / scale);
-    const y = Math.floor((e.clientY - offsetY) / scale);
+    const x = Math.floor((e.clientX - offsetX) / scale), y = Math.floor((e.clientY - offsetY) / scale);
     if (e.button === 0) {
         if (currentTool === 'pencil') {
-            const hex = colorPicker.value;
-            socket.emit('pixel', { index: y * SIZE + x, r: parseInt(hex.slice(1,3),16), g: parseInt(hex.slice(3,5),16), b: parseInt(hex.slice(5,7),16) });
+            const h = colorPicker.value;
+            socket.emit('pixel', { index: y * SIZE + x, r: parseInt(h.slice(1,3),16), g: parseInt(h.slice(3,5),16), b: parseInt(h.slice(5,7),16) });
         } else if (currentTool === 'brush') {
-            const batch = [];
-            const hex = colorPicker.value;
-            const rgb = { r: parseInt(hex.slice(1,3),16), g: parseInt(hex.slice(3,5),16), b: parseInt(hex.slice(5,7),16) };
-            for(let i=-10; i<10; i++) for(let j=-10; j<10; j++) addPixel(x+i, y+j, rgb, batch);
-            socket.emit('pixels_batch', batch);
-        } else if (currentTool === 'rift') {
-            createRift(x, y);
-        }
-    } else {
-        isDragging = true;
-        lastX = e.clientX; lastY = e.clientY;
-    }
+            const b = [], h = colorPicker.value, rgb = { r: parseInt(h.slice(1,3),16), g: parseInt(h.slice(3,5),16), b: parseInt(h.slice(5,7),16) };
+            for(let i=-10; i<10; i++) for(let j=-10; j<10; j++) addPixel(x+i, y+j, rgb, b);
+            socket.emit('pixels_batch', b);
+        } else if (currentTool === 'rift') createRift(x, y);
+    } else { isDragging = true; lastX = e.clientX; lastY = e.clientY; }
 });
-
-window.addEventListener('mousemove', (e) => {
-    if (isDragging) {
-        offsetX += e.clientX - lastX; offsetY += e.clientY - lastY;
-        lastX = e.clientX; lastY = e.clientY;
-        draw();
-    }
-});
+window.addEventListener('mousemove', (e) => { if (isDragging) { offsetX += e.clientX - lastX; offsetY += e.clientY - lastY; lastX = e.clientX; lastY = e.clientY; draw(); } });
 window.addEventListener('mouseup', () => isDragging = false);
 canvas.addEventListener('wheel', (e) => {
-    const factor = e.deltaY > 0 ? 0.8 : 1.2;
-    const mX = e.clientX, mY = e.clientY;
-    offsetX = mX - (mX - offsetX) * factor;
-    offsetY = mY - (mY - offsetY) * factor;
-    scale *= factor;
-    draw();
+    const f = e.deltaY > 0 ? 0.8 : 1.2;
+    offsetX = e.clientX - (e.clientX - offsetX) * f; offsetY = e.clientY - (e.clientY - offsetY) * f;
+    scale *= f; draw();
 }, { passive: false });
-
 window.addEventListener('resize', () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; draw(); });
 canvas.oncontextmenu = (e) => e.preventDefault();
 canvas.width = window.innerWidth; canvas.height = window.innerHeight;
