@@ -52,59 +52,70 @@ function updatePixelInCanvas({ index, r, g, b }) {
     draw();
 }
 
-// УЛУЧШЕННЫЙ АЛГОРИТМ РАЗЛОМА
+// ГИГАНТСКИЙ РАЗЛОМ С ГРАДИЕНТОМ
 function createRift(startX, startY) {
     const batch = [];
-    const numMainBranches = 6; // Количество основных лучей
+    const mainBranches = 12; // Больше лучей
+    const coreRadius = 8;    // Радиус черного ядра
 
-    for (let i = 0; i < numMainBranches; i++) {
-        growBranch(startX, startY, Math.random() * Math.PI * 2, 80, batch);
-    }
-    
-    // Добавляем "ядро" в центре клика
-    for(let x = -3; x <= 3; x++) {
-        for(let y = -3; y <= 3; y++) {
-            if (Math.hypot(x, y) < 3) {
-                addPixelToBatch(startX + x, startY + y, {r:0, g:0, b:0}, batch);
+    // 1. Создаем центральное черное ядро
+    for(let x = -coreRadius; x <= coreRadius; x++) {
+        for(let y = -coreRadius; y <= coreRadius; y++) {
+            if (Math.hypot(x, y) < coreRadius) {
+                addPixel(startX + x, startY + y, {r:0, g:0, b:0}, batch);
             }
         }
+    }
+
+    // 2. Запускаем длинные молнии
+    for (let i = 0; i < mainBranches; i++) {
+        const angle = (i / mainBranches) * Math.PI * 2 + Math.random();
+        growLightning(startX, startY, angle, 250, 0, batch); // Длина 250 пикселей!
     }
 
     socket.emit('pixels_batch', batch);
 }
 
-// Рекурсивная функция роста ветки
-function growBranch(x, y, angle, len, batch) {
-    if (len <= 0) return;
+// Рекурсивные молнии с плавным цветом
+function growLightning(x, y, angle, fullLen, currentStep, batch) {
+    if (currentStep >= fullLen) return;
 
     let curX = x;
     let curY = y;
-    let currentAngle = angle;
+    let curAngle = angle;
+    
+    // Чем дальше от центра, тем меньше ветвится
+    const stepCount = Math.random() * 20 + 10; 
 
-    for (let i = 0; i < len; i++) {
-        // Искривление линии
-        currentAngle += (Math.random() - 0.5) * 0.5;
-        curX += Math.cos(currentAngle);
-        curY += Math.sin(currentAngle);
+    for (let i = 0; i < stepCount; i++) {
+        currentStep++;
+        curAngle += (Math.random() - 0.5) * 0.8; // Излом молнии
+        curX += Math.cos(curAngle);
+        curY += Math.sin(curAngle);
 
-        const px = Math.round(curX);
-        const py = Math.round(curY);
+        // Плавный переход цвета в зависимости от пройденного пути (currentStep / fullLen)
+        const progress = currentStep / fullLen;
+        const color = getRiftColor(progress);
 
-        // Цвета: чем дальше от центра, тем ярче фиолетовый
-        let color = { r: 0, g: 0, b: 0 };
-        if (Math.random() > 0.6) color = { r: 50, g: 0, b: 200 }; // Синий
-        if (Math.random() > 0.8) color = { r: 180, g: 0, b: 255 }; // Яркий фиолетовый
+        addPixel(Math.round(curX), Math.round(curY), color, batch);
 
-        addPixelToBatch(px, py, color, batch);
-
-        // Шанс создать боковое ответвление
-        if (Math.random() < 0.05 && len > 10) {
-            growBranch(px, py, currentAngle + (Math.random() - 0.5) * 2, len * 0.6, batch);
+        // Шанс ветвления
+        if (Math.random() < 0.04 && currentStep < fullLen * 0.8) {
+            const sideAngle = curAngle + (Math.random() - 0.5) * 1.5;
+            growLightning(curX, curY, sideAngle, fullLen, currentStep + 10, batch);
         }
     }
 }
 
-function addPixelToBatch(x, y, color, batch) {
+// Функция плавного градиента
+function getRiftColor(p) {
+    if (p < 0.2) return { r: 0, g: 0, b: 0 };           // В начале черное
+    if (p < 0.5) return { r: 0, g: 50, b: 255 };        // Потом глубокий синий
+    if (p < 0.8) return { r: 150, g: 0, b: 255 };      // Затем фиолетовый
+    return { r: 255, g: 200, b: 0 };                   // На концах искры (золотистый/любой)
+}
+
+function addPixel(x, y, color, batch) {
     if (x >= 0 && x < SIZE && y >= 0 && y < SIZE) {
         batch.push({ index: y * SIZE + x, ...color });
     }
@@ -112,24 +123,18 @@ function addPixelToBatch(x, y, color, batch) {
 
 // УПРАВЛЕНИЕ
 let isDragging = false, lastX, lastY;
-
 canvas.addEventListener('mousedown', (e) => {
     const x = Math.floor((e.clientX - offsetX) / scale);
     const y = Math.floor((e.clientY - offsetY) / scale);
-
     if (e.button === 0) {
         if (currentTool === 'pencil') {
             const hex = colorPicker.value;
-            socket.emit('pixel', { 
-                index: y * SIZE + x, 
-                r: parseInt(hex.slice(1,3),16), g: parseInt(hex.slice(3,5),16), b: parseInt(hex.slice(5,7),16) 
-            });
+            socket.emit('pixel', { index: y * SIZE + x, r: parseInt(hex.slice(1,3),16), g: parseInt(hex.slice(3,5),16), b: parseInt(hex.slice(5,7),16) });
         } else if (currentTool === 'brush') {
             const batch = [];
-            for(let i=-10; i<10; i++) for(let j=-10; j<10; j++) {
-                const hex = colorPicker.value;
-                addPixelToBatch(x+i, y+j, {r: parseInt(hex.slice(1,3),16), g: parseInt(hex.slice(3,5),16), b: parseInt(hex.slice(5,7),16)}, batch);
-            }
+            const hex = colorPicker.value;
+            const rgb = { r: parseInt(hex.slice(1,3),16), g: parseInt(hex.slice(3,5),16), b: parseInt(hex.slice(5,7),16) };
+            for(let i=-10; i<10; i++) for(let j=-10; j<10; j++) addPixel(x+i, y+j, rgb, batch);
             socket.emit('pixels_batch', batch);
         } else if (currentTool === 'rift') {
             createRift(x, y);
